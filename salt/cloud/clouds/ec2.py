@@ -3375,6 +3375,74 @@ def _toggle_delvol(name=None, instance_id=None, device=None, volume_id=None,
               'volume_id': volume_id}
     return show_delvol_on_destroy(name, kwargs, call='action')
 
+def create_image(kwargs=None, call=None, wait_to_finish=False):
+    '''
+    Create an image
+
+    CLI Examples:
+
+    .. code-block:: bash
+
+        salt-cloud -f create_image my-ec2-config instance_id=i-12345678 ami_name=my_image description=created_by_salt reboot=True
+    '''
+    # If passed by salt-run, it will be as a boolean, if passed by salt-cloud, it will be as a string.
+    if 'wait_to_finish' in kwargs:
+        wait_to_finish = str(kwargs['wait_to_finish']) == 'True'
+
+    if call != 'function':
+        log.error(
+            'The create_image function must be called with -f or --function.'
+        )
+        return False
+
+    # Not called "name" to avoid confusion with source instance name and ami name
+    if 'ami_name' not in kwargs:
+        log.error('ami_name must be specified to create an image.')
+        return False
+
+    if 'instance_id' not in kwargs:
+        log.error('instance_id must be specified to create an image.')
+        return False
+
+    if 'reboot' not in kwargs:
+        log.error('The amazon default is to stop, then reboot the instance for image creation. Specify reboot=True to reboot. If you specify reboot=False, file system integrity cannot be guaranteed')
+        return False
+
+    # If passed by salt-run, it will be as a boolean, if passed by salt-cloud, it will be as a string.
+    reboot = str(kwargs['reboot'])
+
+    if reboot != 'False' and reboot != 'True':
+        log.error('reboot should be set to True or False')
+        return False
+
+    params = {'Action': 'CreateImage',
+              'InstanceId': kwargs['instance_id'],
+              'Name': kwargs['ami_name'],
+              'NoReboot': reboot == 'False'}
+
+    if 'description' in kwargs:
+        params['Description'] = kwargs['description']
+
+    log.debug(params)
+
+    data = query(params, return_root=True)
+    log.debug(data)
+
+    r_data = {}
+    for d in data:
+        for k, v in d.items():
+            r_data[k] = v
+    image_id = r_data['imageId']
+
+    # Waits till image is available
+    if wait_to_finish:
+        salt.utils.cloud.run_func_until_ret_arg(fun=describe_images,
+                                                kwargs={'image_id': image_id},
+                                                fun_call=call,
+                                                argument_being_watched='imageState',
+                                                required_argument_response='available')
+
+    return data
 
 def create_volume(kwargs=None, call=None, wait_to_finish=False):
     '''
@@ -3569,6 +3637,43 @@ def delete_volume(name=None, kwargs=None, instance_id=None, call=None):
                      sigver='4')
     return data
 
+def describe_images(kwargs=None, call=None):
+    '''
+    Describe an image (or images)
+
+    image_id
+        One or more image IDs. Multiple IDs must be separated by ",".
+
+    TODO: Add all of the filters.
+    '''
+    if call != 'function':
+        log.error(
+            'The describe_volumes function must be called with -f '
+            'or --function.'
+        )
+        return False
+
+    if not kwargs:
+        kwargs = {}
+
+    params = {'Action': 'DescribeImages'}
+
+    if 'image_id' in kwargs:
+        image_id = kwargs['image_id'].split(',')
+        for image_index, image_id in enumerate(image_id):
+            params['ImageId.{0}'.format(image_index)] = image_id
+
+    log.debug(params)
+
+    data = aws.query(params,
+                     return_url=True,
+                     location=get_location(),
+                     provider=get_provider(),
+                     opts=__opts__,
+                     sigver='4')
+    log.debug(data)
+
+    return data
 
 def describe_volumes(kwargs=None, call=None):
     '''
